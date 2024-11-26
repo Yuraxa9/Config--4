@@ -1,150 +1,78 @@
-import struct
+import argparse
 import csv
-import sys
 
-# Таблица команд с их бинарными кодами
-COMMANDS = {
-    "LOAD_CONST": 0xC5,
-    "LOAD_MEM": 0xB1,
-    "STORE_MEM": 0x6B,
-    "UNARY_ABS": 0xE4
-}
+def log_operation(log_path, operation_code, *args):
+    """Запись операции в лог файл."""
+    if log_path is not None:
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            log_file.write(f"A={operation_code},B={args[0]},C={args[1]}\n")
 
-def validate_range(value, min_val, max_val, field_name):
-    if not (min_val <= value <= max_val):
-        raise ValueError(f"{field_name} value {value} is out of range [{min_val}, {max_val}]")
-    return value
+def serializer(cmd, fields, size):
+    """Преобразование команды в бинарный формат."""
+    bits = 0
+    bits |= cmd
+    for value, offset in fields:
+        bits |= (value << offset)
+    return bits.to_bytes(size, "little")
 
-def assemble(input_file, output_file, log_file):
-    binary_data = []
-    log_data = []
+def assembler(instructions, log_path=None):
+    """Перевод инструкций в бинарный формат."""
+    byte_code = []
+    for instruction in instructions:
+        operation = instruction[0]
+        args = instruction[1:]
 
-    # Чтение входного файла
-    with open(input_file, 'r') as csvfile:
-        reader = csv.DictReader(csvfile)
+        if operation == "load":
+            B, C = args
+            byte_code += serializer(69, [(B, 7), (C, 39)], 6)
+            log_operation(log_path, 69, B, C)
+
+        elif operation == "read":
+            B, C = args
+            byte_code += serializer(49, [(B, 7), (C, 11)], 6)
+            log_operation(log_path, 49, B, C)
+
+        elif operation == "write":
+            B, C = args
+            byte_code += serializer(107, [(B, 7), (C, 11)], 6)
+            log_operation(log_path, 107, B, C)
+
+        elif operation == "abs":
+            B, C = args
+            byte_code += serializer(100, [(B, 7), (C, 11)], 6)
+            log_operation(log_path, 100, B, C)
+
+    return byte_code
+
+def assemble(instructions_path: str, log_path=None):
+    """Чтение инструкций из CSV файла и их ассемблирование."""
+    instructions = []
+    with open(instructions_path, newline='', encoding="utf-8") as csvfile:
+        reader = csv.reader(csvfile)
+        next(reader)  # Пропуск заголовка
         for row in reader:
-            try:
-                command = row["Command"]
-                a = int(row["A"]) & 0x3  # Ограничиваем A до двух младших битов
-                b = int(row["B"])
-                c = int(row["C"])
-                opcode = COMMANDS.get(command)
+            operation = row[0].strip()
+            B = int(row[1].strip())
+            C = int(row[2].strip())
+            instructions.append([operation, B, C])
+    return assembler(instructions, log_path)
 
-                if opcode is None:
-                    raise ValueError(f"Unknown command: {command}")
-
-                # Формируем машинную команду (6 байт)
-                instruction = struct.pack(
-                    '>BIB',
-                    validate_range(opcode, 0, 255, "Opcode"),
-                    validate_range(b, 0, 2**32 - 1, "B"),
-                    validate_range(c, 0, 15, "C")
-                )
-                binary_data.append(instruction)
-
-                # Добавляем запись в лог
-                log_data.append({
-                    "Command": command,
-                    "Opcode": f"0x{opcode:X}",
-                    "A": a,
-                    "B": b,
-                    "C": c
-                })
-            except KeyError as e:
-                print(f"Missing column in input file: {e}")
-                sys.exit(1)
-            except ValueError as e:
-                print(f"Error in data formatting: {e}")
-                sys.exit(1)
-
-    # Записываем бинарный файл
-    with open(output_file, 'wb') as f:
-        for data in binary_data:
-            f.write(data)
-
-    # Записываем лог-файл в формате CSV
-    with open(log_file, 'w', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=["Command", "Opcode", "A", "B", "C"])
-        writer.writeheader()
-        writer.writerows(log_data)
-
-    print("Assembling completed successfully!")
-
-def run_tests():
-    test_cases = [
-        {
-            "description": "Загрузка константы",
-            "command": "LOAD_CONST",
-            "A": 69,
-            "B": 489,
-            "C": 2,
-            "expected": b'\xC5\x00\x00\x01\xE9\x02'  # Исправлено
-        },
-        {
-            "description": "Чтение значения из памяти",
-            "command": "LOAD_MEM",
-            "A": 49,
-            "B": 15,
-            "C": 200,
-            "expected": b'\xB1\x00\x00\x00\x0F\xC8'  # Исправлено
-        },
-        {
-            "description": "Запись значения в память",
-            "command": "STORE_MEM",
-            "A": 107,
-            "B": 6,
-            "C": 11,
-            "expected": b'\x6B\x00\x00\x00\x06\x0B'  # Исправлено
-        },
-        {
-            "description": "Унарная операция abs()",
-            "command": "UNARY_ABS",
-            "A": 100,
-            "B": 13,
-            "C": 4,
-            "expected": b'\xE4\x00\x00\x00\x0D\x04'  # Исправлено
-        }
-    ]
-
-    print("\nRunning tests...")
-    all_passed = True
-    for test in test_cases:
-        print(f"Test: {test['description']}")
-        opcode = COMMANDS[test["command"]]
-        a = test["A"] & 0x3
-        b = test["B"]
-        c = test["C"]
-
-        try:
-            # Формируем машинную команду
-            result = struct.pack(
-                '>BIB',
-                validate_range(opcode, 0, 255, "Opcode"),
-                validate_range(b, 0, 2**32 - 1, "B"),
-                validate_range(c & 0xFF, 0, 255, "C")
-            )
-            assert result == test["expected"], f"Expected {test['expected']}, got {result}"
-            print(f"  Passed: {result}")
-        except ValueError as e:
-            print(f"  Failed: {e}")
-            all_passed = False
-        except AssertionError as e:
-            print(f"  Failed: {e}")
-            all_passed = False
-
-    if all_passed:
-        print("All tests passed successfully!")
-    else:
-        print("Some tests failed.")
-
+def save_to_bin(assembled_instructions, binary_path):
+    """Сохранение ассемблированных инструкций в бинарный файл."""
+    with open(binary_path, "wb") as binary_file:
+        binary_file.write(bytes(assembled_instructions))
 
 if __name__ == "__main__":
-    run_tests()
-    if len(sys.argv) < 4:
-        print("Usage: python assembler.py <input_csv> <output_bin> <log_csv>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Assemble instructions to bytecode.")
+    parser.add_argument("instructions_path", help="Path to the instructions CSV file")
+    parser.add_argument("binary_path", help="Path to the binary file (bin)")
+    parser.add_argument("log_path", help="Path to the log file (csv)")
+    args = parser.parse_args()
 
-    input_file = sys.argv[1]
-    output_file = sys.argv[2]
-    log_file = sys.argv[3]
-    assemble(input_file, output_file, log_file)
+    # Запись заголовка в лог файл
+    with open(args.log_path, "w", encoding="utf-8") as log_file:
+        log_file.write("Operation code,B,Address\n")
+
+    # Ассемблирование
+    result = assemble(args.instructions_path, args.log_path)
+    save_to_bin(result, args.binary_path)

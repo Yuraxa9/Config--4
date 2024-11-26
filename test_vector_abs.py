@@ -1,65 +1,51 @@
 import os
-from assembler import assemble
-from interpreter import interpret
+from assembler import assembler, save_to_bin
+from interpreter import interpreter
 
-def process_csv(input_csv, output_csv):
-    """Обрабатывает CSV файл, преобразуя отрицательные значения."""
-    with open(input_csv, 'r') as infile, open(output_csv, 'w') as outfile:
-        lines = infile.readlines()
-        outfile.write(lines[0])  # Копируем заголовок
-        for line in lines[1:]:
-            parts = line.strip().split(',')
-            if len(parts) < 4:
-                print(f"Error: Malformed line in {input_csv}: {line.strip()}")
-                continue
-            if parts[0] == "LOAD_CONST" and int(parts[2]) < 0:
-                parts[2] = str((1 << 32) + int(parts[2]))  # Преобразование в 2-комплементарный вид
-            outfile.write(','.join(parts) + '\n')
+def generate_instructions():
+    """Генерирует инструкции для выполнения операции abs() над вектором длины 7."""
+    instructions = []
+    vector = [-12, 15, -20, 25, -30, 35, -40]  # Вектор длины 7 с положительными и отрицательными значениями
 
-def test_vector_abs():
-    """Основная тестовая программа."""
-    # Пути к файлам
-    input_csv = "vector_abs.csv"       # Предполагается, что этот файл уже существует
-    processed_csv = "processed_vector_abs.csv"
-    binary_file = "vector_abs.bin"    # Бинарный файл, который будет сгенерирован
-    log_file = "vector_abs.log.csv"   # Лог-файл после сборки
-    result_file = "result_abs.csv"        # Файл с результатами выполнения
-    
-    # Проверяем существование файла vector_abs.csv
-    if not os.path.exists(input_csv):
-        print(f"Error: Input file {input_csv} does not exist.")
-        return
+    # Загрузка элементов вектора в память
+    for i, value in enumerate(vector):
+        instructions.append(("write_mem", i, value))  # Записываем сразу в память (без загрузки в регистры)
 
-    # Преобразование отрицательных значений в input_csv
-    print(f"Processing negative values in {input_csv}...")
-    process_csv(input_csv, processed_csv)
+    # Выполнение операции abs для каждого элемента вектора
+    for i in range(7):
+        instructions.append(("abs", i, i))  # Применяем abs() к каждому элементу и сохраняем в том же месте
 
-    # Сборка программы в бинарный файл
-    print(f"Assembling program from {processed_csv}...")
-    assemble(processed_csv, binary_file, log_file)
-    print(f"Binary file created: {binary_file}")
-    
-    # Выполнение программы
-    print(f"Running program {binary_file}...")
-    interpret(binary_file, result_file, (0, 7))
-    
-    # Проверка результата
-    if os.path.exists(result_file):
-        print(f"Contents of {result_file}:")
-        with open(result_file, 'r') as f:
-            print(f.read())
-    else:
-        print(f"Error: Result file {result_file} was not created.")
-    
-    # Удаление временных файлов (если необходимо)
-    cleanup = input("Do you want to delete temporary files? (y/n): ").strip().lower()
-    if cleanup == 'y':
-        for file in [binary_file, log_file, result_file, processed_csv]:
-            if os.path.exists(file):
-                os.remove(file)
-        print("Temporary files deleted.")
-    else:
-        print("Temporary files retained.")
+    return instructions
+
+def write_csv_instructions(instructions, file_path):
+    """Сохраняет инструкции в CSV файл."""
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("operation,B,C\n")
+        for instruction in instructions:
+            print(f"Writing instruction: {instruction}")  # Добавим вывод инструкций
+            f.write(",".join(map(str, instruction)) + "\n")
+
+def main():
+    # Параметры файлов
+    instructions_file = "test_instructions.csv"
+    binary_file = "test_binary.bin"
+    result_file = "test_result.csv"  # Файл для записи результата
+    log_file = "test_log.csv"
+
+    # Генерация инструкций
+    instructions = generate_instructions()
+    write_csv_instructions(instructions, instructions_file)
+
+    # Запуск ассемблера
+    print("Сборка программы...")
+    assembled_instructions = assembler(instructions, log_file)
+    save_to_bin(assembled_instructions, binary_file)
+    print(f"Программа собрана, бинарный файл: {binary_file}")
+
+    # Запуск интерпретатора
+    print("Запуск интерпретатора...")
+    interpreter(binary_file, result_file, (0, 50))  # Убедимся, что обрабатываем всю память
+    print(f"Результат интерпретации сохранён в файл: {result_file}")
 
 if __name__ == "__main__":
-    test_vector_abs()
+    main()

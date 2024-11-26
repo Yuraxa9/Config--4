@@ -1,111 +1,55 @@
-import struct
+import argparse
 import csv
-import sys
 
-# Таблица команд с их бинарными кодами
-COMMANDS = {
-    0xC5: "LOAD_CONST",
-    0xB1: "LOAD_MEM",
-    0x6B: "STORE_MEM",
-    0xE4: "UNARY_ABS"
-}
+def abs_operation(value):
+    """Выполнение операции abs на числе."""
+    return abs(value)
 
-class VirtualMachine:
-    def __init__(self, memory_size=1024):
-        self.registers = [0] * 16  # 16 регистров
-        self.memory = [0] * memory_size  # Память размером 1024 слова
+# Интерпретатор
+def interpreter(binary_path, result_path, memory_range):
+    memory = [0] * 128  # 128 ячеек памяти (или больше, если необходимо)
+    registers = [0] * 32  # 32 регистра
 
-    def load_const(self, b, c):
-        """Загрузка константы в регистр"""
-        if not (0 <= c < len(self.registers)):
-            raise IndexError(f"Register index out of range: C={c}")
-        print(f"Loading constant {b} into register {c}")
-        self.registers[c] = b
+    with open(binary_path, "rb") as binary_file:
+        byte_code = binary_file.read()
 
+    # Декодирование и исполнение команд
+    i = 0
+    while i < len(byte_code):
+        # Декодируем команду
+        command = byte_code[i] & 0x7F  # Биты 0-6 для команды
+        B = (byte_code[i+1] >> 3) & 0x1F  # Биты 3-7 для B
+        C = ((byte_code[i+1] & 0x07) << 2) | ((byte_code[i+2] >> 6) & 0x03)  # Биты 0-5 для C
+        
+        if command == 69:  # load (Загрузка константы)
+            registers[C] = B
+        elif command == 49:  # read (Чтение из памяти)
+            registers[B] = memory[registers[C]]
+        elif command == 107:  # write (Запись в память)
+            memory[B] = registers[C]
+        elif command == 100:  # abs (Операция abs)
+            registers[B] = abs_operation(memory[registers[C]])
+        
+        i += 6  # Каждая команда занимает 6 байт
 
-    def load_mem(self, b, c):
-        """Чтение значения из памяти"""
-        if not (0 <= c < len(self.registers)):
-            raise IndexError(f"Register index out of range: C={c}")
-        address = self.registers[c]
-        if not (0 <= address < len(self.memory)):
-            raise IndexError(f"Memory access out of range: {address}")
-        print(f"Loading value from memory address {address} into register {b}")
-        self.registers[b] = self.memory[address]
-
-    def store_mem(self, b, c):
-        """Запись значения в память"""
-        if not (0 <= b < len(self.registers)):
-            raise IndexError(f"Register index out of range: B={b}")
-        if not (0 <= c < len(self.registers)):
-            raise IndexError(f"Register index out of range: C={c}")
-        address = self.registers[b]
-        if not (0 <= address < len(self.memory)):
-            raise IndexError(f"Memory access out of range: {address}")
-        print(f"Storing value {self.registers[c]} at memory address {address}")
-        self.memory[address] = self.registers[c]
-
-
-    def unary_abs(self, b, c):
-        """Унарная операция abs()"""
-        if not (0 <= c < len(self.registers)):
-            raise IndexError(f"Register index out of range: C={c}")
-        address = self.registers[c]
-        if not (0 <= address < len(self.memory)):
-            raise IndexError(f"Memory access out of range: {address}")
-        self.registers[b] = abs(self.memory[address])
-
-    def execute(self, instruction):
-        """Выполнение одной инструкции"""
-        opcode = instruction[0]
-        b = struct.unpack(">I", instruction[1:5])[0]
-        c = instruction[5]
-
-        print(f"Executing opcode: {opcode}, B: {b}, C: {c}")
-        print(f"Registers before execution: {self.registers}")
-
-        if opcode == 0xC5:
-            self.load_const(b, c)
-        elif opcode == 0xB1:
-            self.load_mem(b, c)
-        elif opcode == 0x6B:
-            self.store_mem(b, c)
-        elif opcode == 0xE4:
-            self.unary_abs(b, c)
-        else:
-            print(f"Warning: Unknown opcode {opcode}. Skipping.")
-
-        print(f"Registers after execution: {self.registers}")
-        print(f"Memory after execution: {self.memory[:20]}")  # Вывод первых 20 значений памяти
-
-def interpret(binary_file, result_file, memory_range):
-    vm = VirtualMachine()
-    with open(binary_file, 'rb') as f:
-        binary_data = f.read()
-
-    print("Binary file content (hex):", binary_data.hex())
-
-    for i in range(0, len(binary_data), 6):
-        instruction = binary_data[i:i + 6]
-        vm.execute(instruction)
-
-    start, end = memory_range
-    with open(result_file, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(["Address", "Value"])
-        for addr in range(start, end + 1):
-            writer.writerow([addr, vm.memory[addr]])
-
-    print(f"Execution completed. Memory saved to {result_file}")
+    # Запись результата в CSV
+    with open(result_path, "w", newline='', encoding="utf-8") as result_file:
+        csv_writer = csv.writer(result_file)
+        csv_writer.writerow(["Address", "Value"])
+        # Добавим проверку, чтобы избежать выхода за пределы памяти
+        for address in range(memory_range[0], memory_range[1] + 1):
+            if address < len(memory):
+                csv_writer.writerow([address, memory[address]])
+            else:
+                # Если память не инициализирована, записываем 0
+                csv_writer.writerow([address, 0])
 
 if __name__ == "__main__":
-    if len(sys.argv) < 5:
-        print("Usage: python interpreter.py <binary_file> <result_file> <memory_start> <memory_end>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Interpreter for UVM (execute commands from binary file).")
+    parser.add_argument("binary_path", help="Path to the binary file (bin)")
+    parser.add_argument("result_path", help="Path to the result file (csv)")
+    parser.add_argument("first_index", help="The first index of the displayed memory")
+    parser.add_argument("last_index", help="The last index of the displayed memory")
+    args = parser.parse_args()
 
-    binary_file = sys.argv[1]
-    result_file = sys.argv[2]
-    memory_start = int(sys.argv[3])
-    memory_end = int(sys.argv[4])
-
-    interpret(binary_file, result_file, (memory_start, memory_end))
+    interpreter(args.binary_path, args.result_path, (int(args.first_index), int(args.last_index)))
